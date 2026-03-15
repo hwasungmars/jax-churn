@@ -11,7 +11,7 @@ from gemma import gm
 app = fastapi.FastAPI(title="Gemma JAX Inference Service")
 
 # Update to your downloaded Kaggle checkpoint path
-CKPT_PATH = os.environ.get("CKPT_PATH", "/path/to/kaggle/checkpoint/directory")
+CKPT_PATH = os.environ.get("CKPT_PATH", "/Users/hwasung_lee/Downloads/gemma-3-270m")
 
 class ServerState:
     """Holds global state for the loaded model and sampler."""
@@ -32,7 +32,7 @@ async def lifespan(app: fastapi.FastAPI):
     print("Initializing Model Architecture...")
     # NOTE: You must instantiate the architecture that matches your Kaggle download!
     # If you downloaded Gemma 3 4B:
-    model = gm.nn.Gemma3_4B()
+    model = gm.nn.Gemma3_270M()
     # If you downloaded a Gemma 2 2B checkpoint, change this to: model = gm.nn.Gemma2_2B()
 
     print(f"Loading checkpoint from {CKPT_PATH}...")
@@ -69,4 +69,4 @@ async def generate(request: GenerateRequest):
     return GenerateResponse(text=sampled_str)
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000) 
+    uvicorn.run(app, host="0.0.0.0", port=8000)
