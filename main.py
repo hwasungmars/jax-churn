@@ -3,63 +3,52 @@ import contextlib
 
 import fastapi
 import uvicorn
-import pydantic
-import sentencepiece as spm
+from pydantic import BaseModel
 
-from gemma import params as params_lib
-from gemma import sampler
-from gemma import transformer
+# The new streamlined Gemma API
+from gemma import gm
 
 app = fastapi.FastAPI(title="Gemma JAX Inference Service")
 
-# --- Configuration ---
-# Update these paths to your downloaded Kaggle checkpoint and tokenizer
-CKPT_PATH = os.environ.get("CKPT_PATH", "/path/to/kaggle/checkpoint/2b-it")
-TOKENIZER_PATH = os.environ.get("TOKENIZER_PATH", "/path/to/kaggle/tokenizer.model")
-CACHE_SIZE = int(os.environ.get("CACHE_SIZE", "1024"))
+# Update to your downloaded Kaggle checkpoint path
+CKPT_PATH = os.environ.get("CKPT_PATH", "/path/to/kaggle/checkpoint/directory")
 
 class ServerState:
     """Holds global state for the loaded model and sampler."""
     def __init__(self):
-        self.vocab = None
-        self.gemma_sampler = None
+        self.sampler = None
 
 state = ServerState()
 
-class GenerateRequest(pydantic.BaseModel):
+class GenerateRequest(BaseModel):
     prompt: str
     max_tokens: int = 128
-    temperature: float = 0.0  # Greedy decoding by default
 
-class GenerateResponse(pydantic.BaseModel):
+class GenerateResponse(BaseModel):
     text: str
 
 @contextlib.asynccontextmanager
 async def lifespan(app: fastapi.FastAPI):
-    """Lifecycle manager to load model weights into device memory on startup."""
-    print("Loading SentencePiece tokenizer...")
-    state.vocab = spm.SentencePieceProcessor()
-    state.vocab.Load(TOKENIZER_PATH)
+    print("Initializing Model Architecture...")
+    # NOTE: You must instantiate the architecture that matches your Kaggle download!
+    # If you downloaded Gemma 3 4B:
+    model = gm.nn.Gemma3_4B()
+    # If you downloaded a Gemma 2 2B checkpoint, change this to: model = gm.nn.Gemma2_2B()
 
-    print("Loading and formatting Flax parameters from checkpoint...")
-    # This automatically handles the Orbax/Flax parameters
-    params = params_lib.load_and_format_params(CKPT_PATH)
+    print(f"Loading checkpoint from {CKPT_PATH}...")
+    params = gm.ckpts.load_params(CKPT_PATH)
 
-    print("Configuring Transformer...")
-    # Infer architecture config from the checkpoint parameters.
-    # The cache_size defines the static maximum sequence length (prompt + completion)
-    # to avoid JAX recompilation.
-    model_config = transformer.TransformerConfig.from_params(
-        params,
-        cache_size=CACHE_SIZE
-    )
+    print("Loading Tokenizer...")
+    # For Gemma 3, the tokenizer is handled natively:
+    tokenizer = gm.text.Gemma3Tokenizer()
+    # (If using Gemma 2, load it manually: tokenizer = gm.text.Tokenizer("/path/to/tokenizer.model"))
 
-    print("Initializing JAX Sampler...")
-    # The Sampler handles the JIT-compiled inference loop internally
-    state.gemma_sampler = sampler.Sampler(
-        transformer=transformer.Transformer(model_config),
-        vocab=state.vocab,
-        params=params['transformer'],
+    print("Initializing Sampler...")
+    # The new Sampler API cleanly binds the model, weights, and tokenizer together
+    state.sampler = gm.text.Sampler(
+        model=model,
+        params=params,
+        tokenizer=tokenizer,
     )
     print("--- Model Loaded & Ready to Serve ---")
 
@@ -71,17 +60,13 @@ app.router.lifespan_context = lifespan
 
 @app.post("/generate", response_model=GenerateResponse)
 async def generate(request: GenerateRequest):
-    # The sampler expects a list of prompt strings
-    prompts = [request.prompt]
-
-    # Note: The very first request will take significantly longer because
-    # XLA has to JIT compile the forward pass.
-    sampled_strs = state.gemma_sampler(
-        input_strings=prompts,
-        total_generation_steps=request.max_tokens,
+    # The sampler now handles both string tokenization and the JIT compiled inference loop
+    sampled_str = state.sampler.sample(
+        request.prompt,
+        max_new_tokens=request.max_tokens,
     )
 
-    return GenerateResponse(text=sampled_strs[0])
+    return GenerateResponse(text=sampled_str)
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8000) 
