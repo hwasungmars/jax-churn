@@ -55,7 +55,7 @@ async def lifespan(app: fastapi.FastAPI):
 app = fastapi.FastAPI(title="Gemma JAX Inference Service", lifespan=lifespan)
 
 @app.post("/generate", response_model=GenerateResponse)
-async def generate(request: fastapi.Request, payload: GenerateRequest):
+def generate(request: fastapi.Request, payload: GenerateRequest):
     # The sampler now handles both string tokenization and the JIT compiled inference loop
     sampled_str = request.state.sampler.sample(
         payload.prompt,
