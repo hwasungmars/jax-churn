@@ -5,9 +5,14 @@ import fastapi
 import uvicorn
 import pydantic
 import asyncio
+import argparse
+import logging
+import json
 
-# The new streamlined Gemma API
 from gemma import gm
+
+
+LOGGER = logging.getLogger(__name__)
 
 # Update to your downloaded Kaggle checkpoint path
 CKPT_PATH = os.environ.get("CKPT_PATH", "/Users/hwasung_lee/Downloads/gemma-3-270m")
@@ -24,7 +29,9 @@ class GenerateResponse(pydantic.BaseModel):
     text: str
 
 
-async def dynamic_batch_worker(sampler, queue: asyncio.Queue):
+async def dynamic_batch_worker(
+    sampler, queue: asyncio.Queue, max_batch_size: int, batch_timeout_secs: float
+):
     """Continuously monitors the queue and processes batches."""
     while True:
         # 1. Wait until at least one request is in the queue
@@ -32,10 +39,10 @@ async def dynamic_batch_worker(sampler, queue: asyncio.Queue):
         batch = [(prompt, future, max_tokens)]
 
         # 2. Wait a tiny fraction of a second to let other requests pile up
-        await asyncio.sleep(BATCH_TIMEOUT_SECS)
+        await asyncio.sleep(batch_timeout_secs)
 
         # 3. Scoop up any other requests that arrived during the wait
-        while not queue.empty() and len(batch) < MAX_BATCH_SIZE:
+        while not queue.empty() and len(batch) < max_batch_size:
             batch.append(queue.get_nowait())
 
         # Extract the prompts and futures from our grouped batch
@@ -69,8 +76,11 @@ async def lifespan(app: fastapi.FastAPI):
     print("Initializing Model Architecture...")
     model = gm.nn.Gemma3_270M()
 
-    print(f"Loading checkpoint from {CKPT_PATH}...")
-    params = gm.ckpts.load_params(CKPT_PATH)
+    checkpoint_path = getattr(app.state.args, "checkpoint_path")
+    max_batch_size = getattr(app.state.args, "max_batch_size")
+    batch_timeout_secs = getattr(app.state.args, "batch_timeout_secs")
+    print(f"Loading checkpoint from {checkpoint_path}...")
+    params = gm.ckpts.load_params(checkpoint_path)
 
     print("Loading Tokenizer...")
     tokenizer = gm.text.Gemma3Tokenizer()
@@ -85,7 +95,9 @@ async def lifespan(app: fastapi.FastAPI):
     print("--- Model Loaded & Ready to Serve ---")
 
     request_queue = asyncio.Queue()
-    worker_task = asyncio.create_task(dynamic_batch_worker(sampler, request_queue))
+    worker_task = asyncio.create_task(
+        dynamic_batch_worker(sampler, request_queue, max_batch_size, batch_timeout_secs)
+    )
 
     yield {"queue": request_queue}
 
@@ -111,5 +123,48 @@ async def generate(request: fastapi.Request, payload: GenerateRequest):
         )
 
 
-if __name__ == "__main__":
+def main(args: argparse.Namespace) -> None:
+    """Main function."""
+    LOGGER.info("Running with args: %s", json.dumps(dict(vars(args)), indent=2))
+    app.state.args = args
     uvicorn.run(app, host="0.0.0.0", port=8000)
+
+
+def arg_parse() -> argparse.Namespace:
+    """Parse arguments and return an args object."""
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--log-level",
+        dest="log_level",
+        choices=logging._nameToLevel.keys(),
+        default="INFO",
+        help="Log level for the default logger.",
+    )
+    parser.add_argument(
+        "--checkpoint-path",
+        type=str,
+        default="/Users/hwasung_lee/Downloads/gemma-3-270m",
+        help="Path to the downloaded Gemma checkpoint directory",
+    )
+    parser.add_argument(
+        "--max-batch-size",
+        type=int,
+        default=4,
+        help="Maximum number of requests to process in a single JAX batch",
+    )
+    parser.add_argument(
+        "--batch-timeout-secs",
+        type=float,
+        default=0.05,
+        help="Time in seconds to wait for additional requests to batch",
+    )
+    return parser.parse_args()
+
+
+if __name__ == "__main__":
+    ARGS = arg_parse()
+    logging.basicConfig(
+        level=logging._nameToLevel[ARGS.log_level],
+        format=("%(asctime)s " + logging.BASIC_FORMAT),
+    )
+    main(ARGS)
