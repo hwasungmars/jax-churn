@@ -46,13 +46,16 @@ app = fastapi.FastAPI(title="Gemma JAX Inference Service", lifespan=lifespan)
 
 @app.post("/generate", response_model=GenerateResponse)
 def generate(request: fastapi.Request, payload: GenerateRequest):
-    # The sampler now handles both string tokenization and the JIT compiled inference loop
-    sampled_str = request.state.sampler.sample(
-        payload.prompt,
-        max_new_tokens=payload.max_tokens,
-    )
+    try:
+        sampled_str = request.state.sampler.sample(
+            payload.prompt,
+            max_new_tokens=payload.max_tokens,
+        )
 
-    return GenerateResponse(text=sampled_str)
+        return GenerateResponse(text=sampled_str)
+    except Exception as e:
+        print(f"Generation Error: {str(e)}")
+        raise fastapi.HTTPException(status_code=500, detail=f"Inference engine failed: {str(e)}")
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
