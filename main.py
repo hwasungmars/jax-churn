@@ -48,7 +48,8 @@ async def dynamic_batch_worker(
         prompts = [item[0] for item in valid_batch]
         futures = [item[1] for item in valid_batch]
 
-        # Use the max_tokens from the first request in the batch (simplified)
+        # We need to sample until we satisfy all the requests in the batch,
+        # in this case we should sample until the absolute max.
         batch_max_tokens = max(item[2] for item in valid_batch)
 
         try:
