@@ -40,12 +40,16 @@ async def dynamic_batch_worker(
         while not queue.empty() and len(batch) < max_batch_size:
             batch.append(queue.get_nowait())
 
+        valid_batch = [item for item in batch if not item[1].cancelled()]
+        if not valid_batch:
+            continue
+
         # Extract the prompts and futures from our grouped batch
-        prompts = [item[0] for item in batch]
-        futures = [item[1] for item in batch]
+        prompts = [item[0] for item in valid_batch]
+        futures = [item[1] for item in valid_batch]
 
         # Use the max_tokens from the first request in the batch (simplified)
-        batch_max_tokens = batch[0][2]
+        batch_max_tokens = max(item[2] for item in valid_batch)
 
         try:
             # 4. Run the synchronous JAX math in a background thread
@@ -82,7 +86,7 @@ async def lifespan(app: fastapi.FastAPI):
         params=params,
         tokenizer=tokenizer,
     )
-    LOGGER.info("Model hav been loaded and ready to serve!")
+    LOGGER.info("Model has been loaded and ready to serve!")
 
     request_queue = asyncio.Queue(maxsize=max_queue_size)
     worker_task = asyncio.create_task(
@@ -105,7 +109,7 @@ async def generate(request: fastapi.Request, payload: GenerateRequest):
     try:
        request.state.queue.put_nowait((payload.prompt, future, payload.max_tokens))
     except asyncio.QueueFull:
-        LOGGER.warning("Queue is full. Rejecting requst with 429.")
+        LOGGER.warning("Queue is full. Rejecting request with 429.")
         raise fastapi.HTTPException(
             status_code=429,
             detail="Server is currently overloaded. Please try again later.",
@@ -114,6 +118,10 @@ async def generate(request: fastapi.Request, payload: GenerateRequest):
 
     try:
         return GenerateResponse(text=await future)
+    except asyncio.CancelledError:
+        # If the client drops the connection, cancel the future so the worker knows!
+        future.cancel()
+        raise
     except Exception as e:
         LOGGER.exception("Generation error.")
         raise fastapi.HTTPException(
