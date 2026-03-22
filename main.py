@@ -14,11 +14,6 @@ from gemma import gm
 
 LOGGER = logging.getLogger(__name__)
 
-# Update to your downloaded Kaggle checkpoint path
-CKPT_PATH = os.environ.get("CKPT_PATH", "/Users/hwasung_lee/Downloads/gemma-3-270m")
-BATCH_TIMEOUT_SECS = 0.05
-MAX_BATCH_SIZE = 4
-
 
 class GenerateRequest(pydantic.BaseModel):
     prompt: str
@@ -76,6 +71,7 @@ async def lifespan(app: fastapi.FastAPI):
     checkpoint_path = getattr(app.state.args, "checkpoint_path")
     max_batch_size = getattr(app.state.args, "max_batch_size")
     batch_timeout_secs = getattr(app.state.args, "batch_timeout_secs")
+    max_queue_size = getattr(app.state.args, "max_queue_size")
 
     LOGGER.info("Initialising model architecture...")
     model = gm.nn.Gemma3_270M()
@@ -88,7 +84,7 @@ async def lifespan(app: fastapi.FastAPI):
     )
     LOGGER.info("Model hav been loaded and ready to serve!")
 
-    request_queue = asyncio.Queue()
+    request_queue = asyncio.Queue(maxsize=max_queue_size)
     worker_task = asyncio.create_task(
         dynamic_batch_worker(sampler, request_queue, max_batch_size, batch_timeout_secs)
     )
@@ -106,7 +102,15 @@ app = fastapi.FastAPI(title="Gemma JAX Inference Service", lifespan=lifespan)
 async def generate(request: fastapi.Request, payload: GenerateRequest):
     loop = asyncio.get_running_loop()
     future = loop.create_future()
-    await request.state.queue.put((payload.prompt, future, payload.max_tokens))
+    try:
+       request.state.queue.put_nowait((payload.prompt, future, payload.max_tokens))
+    except asyncio.QueueFull:
+        LOGGER.warning("Queue is full. Rejecting requst with 429.")
+        raise fastapi.HTTPException(
+            status_code=429,
+            detail="Server is currently overloaded. Please try again later.",
+            headers={"Retry-After": "5"} # Tells polite clients to wait 5 seconds
+        )
 
     try:
         return GenerateResponse(text=await future)
@@ -151,6 +155,12 @@ def arg_parse() -> argparse.Namespace:
         type=float,
         default=0.05,
         help="Time in seconds to wait for additional requests to batch",
+    )
+    parser.add_argument(
+        "--max-queue-size",
+        type=int,
+        default=50,
+        help="Maximum number of pending requests before rejecting with 429",
     )
     return parser.parse_args()
 
