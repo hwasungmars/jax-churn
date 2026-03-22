@@ -73,26 +73,20 @@ async def dynamic_batch_worker(
 
 @contextlib.asynccontextmanager
 async def lifespan(app: fastapi.FastAPI):
-    print("Initializing Model Architecture...")
-    model = gm.nn.Gemma3_270M()
-
     checkpoint_path = getattr(app.state.args, "checkpoint_path")
     max_batch_size = getattr(app.state.args, "max_batch_size")
     batch_timeout_secs = getattr(app.state.args, "batch_timeout_secs")
-    print(f"Loading checkpoint from {checkpoint_path}...")
+
+    LOGGER.info("Initialising model architecture...")
+    model = gm.nn.Gemma3_270M()
     params = gm.ckpts.load_params(checkpoint_path)
-
-    print("Loading Tokenizer...")
     tokenizer = gm.text.Gemma3Tokenizer()
-
-    print("Initializing Sampler...")
-    # The new Sampler API cleanly binds the model, weights, and tokenizer together
     sampler = gm.text.Sampler(
         model=model,  # type: ignore[invalid-argument-type]
         params=params,
         tokenizer=tokenizer,
     )
-    print("--- Model Loaded & Ready to Serve ---")
+    LOGGER.info("Model hav been loaded and ready to serve!")
 
     request_queue = asyncio.Queue()
     worker_task = asyncio.create_task(
@@ -101,7 +95,7 @@ async def lifespan(app: fastapi.FastAPI):
 
     yield {"queue": request_queue}
 
-    print("Shutting down service...")
+    LOGGER.info("Shutting down service...")
     worker_task.cancel()
 
 
@@ -117,7 +111,7 @@ async def generate(request: fastapi.Request, payload: GenerateRequest):
     try:
         return GenerateResponse(text=await future)
     except Exception as e:
-        print(f"Generation Error: {str(e)}")
+        LOGGER.exception("Generation error.")
         raise fastapi.HTTPException(
             status_code=500, detail=f"Inference engine failed: {str(e)}"
         )
