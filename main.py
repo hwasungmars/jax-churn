@@ -8,8 +8,6 @@ import pydantic
 # The new streamlined Gemma API
 from gemma import gm
 
-app = fastapi.FastAPI(title="Gemma JAX Inference Service")
-
 # Update to your downloaded Kaggle checkpoint path
 CKPT_PATH = os.environ.get("CKPT_PATH", "/Users/hwasung_lee/Downloads/gemma-3-270m")
 
@@ -17,8 +15,6 @@ class ServerState:
     """Holds global state for the loaded model and sampler."""
     def __init__(self):
         self.sampler: gm.text.Sampler | None = None
-
-state = ServerState()
 
 class GenerateRequest(pydantic.BaseModel):
     prompt: str
@@ -45,25 +41,25 @@ async def lifespan(app: fastapi.FastAPI):
 
     print("Initializing Sampler...")
     # The new Sampler API cleanly binds the model, weights, and tokenizer together
-    state.sampler = gm.text.Sampler(
+    sampler = gm.text.Sampler(
         model=model,
         params=params,
         tokenizer=tokenizer,
     )
     print("--- Model Loaded & Ready to Serve ---")
 
-    yield
+    yield {"sampler": sampler}
 
     print("Shutting down service...")
 
-app.router.lifespan_context = lifespan
+app = fastapi.FastAPI(title="Gemma JAX Inference Service", lifespan=lifespan)
 
 @app.post("/generate", response_model=GenerateResponse)
-async def generate(request: GenerateRequest):
+async def generate(request: fastapi.Request, payload: GenerateRequest):
     # The sampler now handles both string tokenization and the JIT compiled inference loop
-    sampled_str = state.sampler.sample(
-        request.prompt,
-        max_new_tokens=request.max_tokens,
+    sampled_str = request.state.sampler.sample(
+        payload.prompt,
+        max_new_tokens=payload.max_tokens,
     )
 
     return GenerateResponse(text=sampled_str)
