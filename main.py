@@ -3,7 +3,7 @@ import contextlib
 
 import fastapi
 import uvicorn
-from pydantic import BaseModel
+import pydantic
 
 # The new streamlined Gemma API
 from gemma import gm
@@ -16,15 +16,15 @@ CKPT_PATH = os.environ.get("CKPT_PATH", "/Users/hwasung_lee/Downloads/gemma-3-27
 class ServerState:
     """Holds global state for the loaded model and sampler."""
     def __init__(self):
-        self.sampler = None
+        self.sampler: gm.text.Sampler | None = None
 
 state = ServerState()
 
-class GenerateRequest(BaseModel):
+class GenerateRequest(pydantic.BaseModel):
     prompt: str
     max_tokens: int = 128
 
-class GenerateResponse(BaseModel):
+class GenerateResponse(pydantic.BaseModel):
     text: str
 
 @contextlib.asynccontextmanager
