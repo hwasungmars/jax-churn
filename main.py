@@ -25,7 +25,7 @@ class GenerateResponse(pydantic.BaseModel):
 
 
 async def dynamic_batch_worker(
-    sampler, queue: asyncio.Queue, max_batch_size: int, batch_timeout_secs: float
+    sampler: gm.text.Sampler, queue: asyncio.Queue, max_batch_size: int, batch_timeout_secs: float
 ):
     """Continuously monitors the queue and processes batches."""
     while True:
@@ -45,24 +45,25 @@ async def dynamic_batch_worker(
             continue
 
         # Extract the prompts and futures from our grouped batch
-        prompts = [item[0] for item in valid_batch]
-        futures = [item[1] for item in valid_batch]
+        prompts: list[str] = [item[0] for item in valid_batch]
+        futures: list[asyncio.Future] = [item[1] for item in valid_batch]
+        max_tokens: list[int] = [item[2] for item in valid_batch]
 
         # We need to sample until we satisfy all the requests in the batch,
         # in this case we should sample until the absolute max.
-        batch_max_tokens = max(item[2] for item in valid_batch)
+        batch_max_tokens = max(max_tokens)
 
         try:
             # 4. Run the synchronous JAX math in a background thread
             # so it doesn't freeze the async queue!
-            sampled_strs = await asyncio.to_thread(
+            sampled_strs: list[str] = await asyncio.to_thread(
                 sampler.sample, prompts, max_new_tokens=batch_max_tokens
-            )
+            ) # type: ignore[invalid-assignment]
 
             # 5. Hand the results back to the waiting HTTP requests
-            for fut, result_text in zip(futures, sampled_strs):
+            for fut, result_text, max_token in zip(futures, sampled_strs, max_tokens):
                 if not fut.done():
-                    fut.set_result(result_text)
+                    fut.set_result(result_text[:max_token])
 
         except Exception as e:
             # If JAX crashes, send the error to all waiting clients
