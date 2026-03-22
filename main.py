@@ -11,11 +11,6 @@ from gemma import gm
 # Update to your downloaded Kaggle checkpoint path
 CKPT_PATH = os.environ.get("CKPT_PATH", "/Users/hwasung_lee/Downloads/gemma-3-270m")
 
-class ServerState:
-    """Holds global state for the loaded model and sampler."""
-    def __init__(self):
-        self.sampler: gm.text.Sampler | None = None
-
 class GenerateRequest(pydantic.BaseModel):
     prompt: str
     max_tokens: int = 128
@@ -26,18 +21,13 @@ class GenerateResponse(pydantic.BaseModel):
 @contextlib.asynccontextmanager
 async def lifespan(app: fastapi.FastAPI):
     print("Initializing Model Architecture...")
-    # NOTE: You must instantiate the architecture that matches your Kaggle download!
-    # If you downloaded Gemma 3 4B:
     model = gm.nn.Gemma3_270M()
-    # If you downloaded a Gemma 2 2B checkpoint, change this to: model = gm.nn.Gemma2_2B()
 
     print(f"Loading checkpoint from {CKPT_PATH}...")
     params = gm.ckpts.load_params(CKPT_PATH)
 
     print("Loading Tokenizer...")
-    # For Gemma 3, the tokenizer is handled natively:
     tokenizer = gm.text.Gemma3Tokenizer()
-    # (If using Gemma 2, load it manually: tokenizer = gm.text.Tokenizer("/path/to/tokenizer.model"))
 
     print("Initializing Sampler...")
     # The new Sampler API cleanly binds the model, weights, and tokenizer together
