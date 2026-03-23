@@ -117,6 +117,12 @@ async def lifespan(app: fastapi.FastAPI):
 
     LOGGER.info("Shutting down service...")
     worker_task.cancel()
+    try:
+        # Wait for the task to cancel cleanly
+        await worker_task
+    except asyncio.CancelledError:
+        pass
+
     while not request_queue.empty():
         item: QueueItem = request_queue.get_nowait()
         if not item.future.done():
@@ -166,12 +172,14 @@ async def generate(request: fastapi.Request, payload: GenerateRequest):
         raise  # If no raise is sent here FastAPI tries to send a None response to the client.
     except asyncio.TimeoutError:
         LOGGER.error("Timed out processing request: %s", payload.request_id)
+        future.cancel()
         raise fastapi.HTTPException(
             status_code=fastapi.status.HTTP_504_GATEWAY_TIMEOUT,
             detail=f"Inference engine timed out: {payload.request_id}",
         )
     except Exception as e:
         LOGGER.exception("Generation error.")
+        future.cancel()
         raise fastapi.HTTPException(
             status_code=500, detail=f"Inference engine failed: {str(e)}"
         )
