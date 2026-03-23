@@ -1,4 +1,3 @@
-import os
 import contextlib
 
 import fastapi
@@ -16,27 +15,27 @@ LOGGER = logging.getLogger(__name__)
 
 
 class GenerateRequest(pydantic.BaseModel):
+    request_id: str
     prompt: str
     max_tokens: int = 128
 
 
 class GenerateResponse(pydantic.BaseModel):
+    request_id: str
     text: str
 
 
 async def dynamic_batch_worker(
-    sampler: gm.text.Sampler, queue: asyncio.Queue, max_batch_size: int, batch_timeout_secs: float
+    sampler: gm.text.Sampler,
+    queue: asyncio.Queue,
+    max_batch_size: int,
+    batch_timeout_secs: float,
 ):
     """Continuously monitors the queue and processes batches."""
     while True:
-        # 1. Wait until at least one request is in the queue
         prompt, future, max_tokens = await queue.get()
         batch = [(prompt, future, max_tokens)]
-
-        # 2. Wait a tiny fraction of a second to let other requests pile up
         await asyncio.sleep(batch_timeout_secs)
-
-        # 3. Scoop up any other requests that arrived during the wait
         while not queue.empty() and len(batch) < max_batch_size:
             batch.append(queue.get_nowait())
 
@@ -58,7 +57,7 @@ async def dynamic_batch_worker(
             # so it doesn't freeze the async queue!
             sampled_strs: list[str] = await asyncio.to_thread(
                 sampler.sample, prompts, max_new_tokens=batch_max_tokens
-            ) # type: ignore[invalid-assignment]
+            )  # type: ignore[invalid-assignment]
 
             # 5. Hand the results back to the waiting HTTP requests
             for fut, result_text, max_token in zip(futures, sampled_strs, max_tokens):
@@ -74,10 +73,10 @@ async def dynamic_batch_worker(
 
 @contextlib.asynccontextmanager
 async def lifespan(app: fastapi.FastAPI):
-    checkpoint_path = getattr(app.state.args, "checkpoint_path")
-    max_batch_size = getattr(app.state.args, "max_batch_size")
-    batch_timeout_secs = getattr(app.state.args, "batch_timeout_secs")
-    max_queue_size = getattr(app.state.args, "max_queue_size")
+    checkpoint_path = app.state.args.checkpoint_path
+    max_batch_size = app.state.args.max_batch_size
+    batch_timeout_secs = app.state.args.batch_timeout_secs
+    max_queue_size = app.state.args.max_queue_size
 
     LOGGER.info("Initialising model architecture...")
     model = gm.nn.Gemma3_270M()
@@ -109,21 +108,29 @@ async def generate(request: fastapi.Request, payload: GenerateRequest):
     loop = asyncio.get_running_loop()
     future = loop.create_future()
     try:
-       request.state.queue.put_nowait((payload.prompt, future, payload.max_tokens))
+        request.state.queue.put_nowait((payload.prompt, future, payload.max_tokens))
     except asyncio.QueueFull:
         LOGGER.warning("Queue is full. Rejecting request with 429.")
         raise fastapi.HTTPException(
             status_code=429,
             detail="Server is currently overloaded. Please try again later.",
-            headers={"Retry-After": "5"} # Tells polite clients to wait 5 seconds
+            headers={"Retry-After": "5"},  # Tells polite clients to wait 5 seconds
         )
 
     try:
-        return GenerateResponse(text=await future)
+        return GenerateResponse(
+            text=await asyncio.wait_for(future, 300), request_id=payload.request_id
+        )
     except asyncio.CancelledError:
-        # If the client drops the connection, cancel the future so the worker knows!
+        LOGGER.debug("Client cancelled request: %s", payload.request_id)
         future.cancel()
-        raise
+        raise  # If no raise is sent here FastAPI tries to send a None response to the client.
+    except asyncio.TimeoutError:
+        LOGGER.error("Timed out processing request: %s", payload.request_id)
+        raise fastapi.HTTPException(
+            status_code=fastapi.status.HTTP_504_GATEWAY_TIMEOUT,
+            detail=f"Inference engine timed out: {payload.request_id}",
+        )
     except Exception as e:
         LOGGER.exception("Generation error.")
         raise fastapi.HTTPException(
