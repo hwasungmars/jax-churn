@@ -89,10 +89,16 @@ async def lifespan(app: fastapi.FastAPI):
     )
     LOGGER.info("Model has been loaded and ready to serve!")
 
+    def _on_worker_done(task: asyncio.Task) -> None:
+        if not task.cancelled():
+            if exc := task.exception():
+                LOGGER.critical("Batch worker died unexpectedly: %s", exc, exc_info=exc)
+
     request_queue = asyncio.Queue(maxsize=max_queue_size)
     worker_task = asyncio.create_task(
         dynamic_batch_worker(sampler, request_queue, max_batch_size, batch_timeout_secs)
     )
+    worker_task.add_done_callback(_on_worker_done)
 
     yield {"queue": request_queue}
 
