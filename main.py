@@ -160,7 +160,7 @@ def main(args: argparse.Namespace) -> None:
     """Main function."""
     LOGGER.info("Running with args: %s", json.dumps(dict(vars(args)), indent=2))
     app.state.args = args
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host=args.host, port=args.port)
 
 
 def arg_parse() -> argparse.Namespace:
@@ -196,6 +196,17 @@ def arg_parse() -> argparse.Namespace:
         type=int,
         default=50,
         help="Maximum number of pending requests before rejecting with 429",
+    )
+    parser.add_argument(
+        "--host",
+        default="0.0.0.0",
+        help="The host to run FastAPI in.",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=8000,
+        help="The port to run FastAPI in.",
     )
     return parser.parse_args()
 
