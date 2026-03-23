@@ -46,12 +46,13 @@ async def dynamic_batch_worker(
         if queue.qsize() < max_batch_size - 1:
             await asyncio.sleep(batch_timeout_secs)
 
-        while queue.qsize() > 0 and len(batch) < max_batch_size:
+        while not queue.empty() and len(batch) < max_batch_size:
             batch.append(queue.get_nowait())
 
         valid_batch = [item for item in batch if not item.future.cancelled()]
         if not valid_batch:
             continue
+        LOGGER.info("Batch size: %s", len(valid_batch))
 
         # Extract the prompts and futures from our grouped batch
         prompts: list[str] = [item.prompt for item in valid_batch]
