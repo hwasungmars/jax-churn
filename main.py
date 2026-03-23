@@ -9,6 +9,7 @@ import logging
 import json
 import pathlib
 import typing
+import uuid
 
 from gemma import gm
 
@@ -17,7 +18,7 @@ LOGGER = logging.getLogger(__name__)
 
 
 class GenerateRequest(pydantic.BaseModel):
-    request_id: str
+    request_id: str = pydantic.Field(default_factory=lambda: str(uuid.uuid4()))
     prompt: str
     max_tokens: int = 128
 
