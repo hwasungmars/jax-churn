@@ -7,6 +7,7 @@ import asyncio
 import argparse
 import logging
 import json
+import pathlib
 
 from gemma import gm
 
@@ -164,7 +165,7 @@ def arg_parse() -> argparse.Namespace:
     parser.add_argument(
         "--checkpoint-path",
         type=str,
-        default="/Users/hwasung_lee/Downloads/gemma-3-270m",
+        default=str(pathlib.Path.home() / "Downloads" / "gemma-3-270m"),
         help="Path to the downloaded Gemma checkpoint directory",
     )
     parser.add_argument(
