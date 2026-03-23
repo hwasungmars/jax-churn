@@ -119,6 +119,20 @@ async def lifespan(app: fastapi.FastAPI):
 app = fastapi.FastAPI(title="Gemma JAX Inference Service", lifespan=lifespan)
 
 
+@app.get("/health/live")
+async def liveness() -> dict[str, str]:
+    return {"status": "ok"}
+
+
+@app.get("/health/ready")
+async def readiness(request: fastapi.Request) -> dict[str, str]:
+    if not hasattr(app.state, "args"):
+        raise fastapi.HTTPException(status_code=503, detail="Not initialised")
+    if request.state.queue is None:
+        raise fastapi.HTTPException(status_code=503, detail="Queue not initialised")
+    return {"status": "ok"}
+
+
 @app.post("/generate", response_model=GenerateResponse)
 async def generate(request: fastapi.Request, payload: GenerateRequest):
     loop = asyncio.get_running_loop()
