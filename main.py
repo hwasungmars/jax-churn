@@ -36,7 +36,7 @@ class QueueItem(typing.NamedTuple):
 
 async def dynamic_batch_worker(
     sampler: gm.text.Sampler,
-    queue: asyncio.Queue,
+    queue: asyncio.Queue[QueueItem],
     max_batch_size: int,
     batch_timeout_secs: float,
 ):
@@ -126,7 +126,7 @@ async def liveness() -> dict[str, str]:
 
 @app.get("/health/ready")
 async def readiness(request: fastapi.Request) -> dict[str, str]:
-    if not hasattr(app.state, "args"):
+    if not hasattr(request.app.state, "args"):
         raise fastapi.HTTPException(status_code=503, detail="Not initialised")
     if not hasattr(request.state, "queue"):
         raise fastapi.HTTPException(status_code=503, detail="Queue not initialised")
