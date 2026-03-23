@@ -39,12 +39,14 @@ async def dynamic_batch_worker(
     queue: asyncio.Queue[QueueItem],
     max_batch_size: int,
     batch_timeout_secs: float,
-):
+) -> None:
     """Continuously monitors the queue and processes batches."""
     while True:
         batch: list[QueueItem] = [await queue.get()]
-        await asyncio.sleep(batch_timeout_secs)
-        while not queue.empty() and len(batch) < max_batch_size:
+        if queue.qsize() < max_batch_size - 1:
+            await asyncio.sleep(batch_timeout_secs)
+
+        while queue.qsize() > 0 and len(batch) < max_batch_size:
             batch.append(queue.get_nowait())
 
         valid_batch = [item for item in batch if not item.future.cancelled()]
@@ -102,15 +104,16 @@ async def lifespan(app: fastapi.FastAPI):
     def _on_worker_done(task: asyncio.Task) -> None:
         if not task.cancelled():
             if exc := task.exception():
-                LOGGER.critical("Batch worker died unexpectedly: %s", exc, exc_info=exc)
+                LOGGER.critical("Batch worker died unexpectedly.", exc_info=exc)
 
-    request_queue = asyncio.Queue(maxsize=max_queue_size)
+    request_queue = asyncio.Queue[QueueItem](maxsize=max_queue_size)
     worker_task = asyncio.create_task(
         dynamic_batch_worker(sampler, request_queue, max_batch_size, batch_timeout_secs)
     )
     worker_task.add_done_callback(_on_worker_done)
 
-    yield {"queue": request_queue}
+    app.state.queue = request_queue
+    yield
 
     LOGGER.info("Shutting down service...")
     worker_task.cancel()
@@ -132,7 +135,7 @@ async def liveness() -> dict[str, str]:
 async def readiness(request: fastapi.Request) -> dict[str, str]:
     if not hasattr(request.app.state, "args"):
         raise fastapi.HTTPException(status_code=503, detail="Not initialised")
-    if not hasattr(request.state, "queue"):
+    if not hasattr(request.app.state, "queue"):
         raise fastapi.HTTPException(status_code=503, detail="Queue not initialised")
     return {"status": "ok"}
 
@@ -142,7 +145,7 @@ async def generate(request: fastapi.Request, payload: GenerateRequest):
     loop = asyncio.get_running_loop()
     future = loop.create_future()
     try:
-        request.state.queue.put_nowait(
+        request.app.state.queue.put_nowait(
             QueueItem(payload.prompt, payload.max_tokens, future)
         )
     except asyncio.QueueFull:
