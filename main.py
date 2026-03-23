@@ -8,6 +8,7 @@ import argparse
 import logging
 import json
 import pathlib
+import typing
 
 from gemma import gm
 
@@ -26,6 +27,12 @@ class GenerateResponse(pydantic.BaseModel):
     text: str
 
 
+class QueueItem(typing.NamedTuple):
+    prompt: str
+    max_tokens: int
+    future: asyncio.Future
+
+
 async def dynamic_batch_worker(
     sampler: gm.text.Sampler,
     queue: asyncio.Queue,
@@ -34,24 +41,23 @@ async def dynamic_batch_worker(
 ):
     """Continuously monitors the queue and processes batches."""
     while True:
-        prompt, future, max_tokens = await queue.get()
-        batch = [(prompt, future, max_tokens)]
+        batch: list[QueueItem] = [await queue.get()]
         await asyncio.sleep(batch_timeout_secs)
         while not queue.empty() and len(batch) < max_batch_size:
             batch.append(queue.get_nowait())
 
-        valid_batch = [item for item in batch if not item[1].cancelled()]
+        valid_batch = [item for item in batch if not item.future.cancelled()]
         if not valid_batch:
             continue
 
         # Extract the prompts and futures from our grouped batch
-        prompts: list[str] = [item[0] for item in valid_batch]
-        futures: list[asyncio.Future] = [item[1] for item in valid_batch]
-        max_tokens: list[int] = [item[2] for item in valid_batch]
+        prompts: list[str] = [item.prompt for item in valid_batch]
+        max_tokens_s: list[int] = [item.max_tokens for item in valid_batch]
+        futures: list[asyncio.Future] = [item.future for item in valid_batch]
 
         # We need to sample until we satisfy all the requests in the batch,
         # in this case we should sample until the absolute max.
-        batch_max_tokens = max(max_tokens)
+        batch_max_tokens = max(max_tokens_s)
 
         try:
             # 4. Run the synchronous JAX math in a background thread
@@ -61,9 +67,11 @@ async def dynamic_batch_worker(
             )  # type: ignore[invalid-assignment]
 
             # 5. Hand the results back to the waiting HTTP requests
-            for fut, result_text, max_token in zip(futures, sampled_strs, max_tokens):
+            for fut, result_text, max_tokens in zip(
+                futures, sampled_strs, max_tokens_s
+            ):
                 if not fut.done():
-                    fut.set_result(result_text[:max_token])
+                    fut.set_result(result_text[:max_tokens])
 
         except Exception as e:
             # If JAX crashes, send the error to all waiting clients
@@ -115,7 +123,9 @@ async def generate(request: fastapi.Request, payload: GenerateRequest):
     loop = asyncio.get_running_loop()
     future = loop.create_future()
     try:
-        request.state.queue.put_nowait((payload.prompt, future, payload.max_tokens))
+        request.state.queue.put_nowait(
+            QueueItem(payload.prompt, payload.max_tokens, future)
+        )
     except asyncio.QueueFull:
         LOGGER.warning("Queue is full. Rejecting request with 429.")
         raise fastapi.HTTPException(
