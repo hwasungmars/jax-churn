@@ -128,7 +128,7 @@ async def liveness() -> dict[str, str]:
 async def readiness(request: fastapi.Request) -> dict[str, str]:
     if not hasattr(app.state, "args"):
         raise fastapi.HTTPException(status_code=503, detail="Not initialised")
-    if hasattr(request.state, "queue"):
+    if not hasattr(request.state, "queue"):
         raise fastapi.HTTPException(status_code=503, detail="Queue not initialised")
     return {"status": "ok"}
 
