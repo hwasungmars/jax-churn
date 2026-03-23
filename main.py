@@ -114,6 +114,10 @@ async def lifespan(app: fastapi.FastAPI):
 
     LOGGER.info("Shutting down service...")
     worker_task.cancel()
+    while not request_queue.empty():
+        item: QueueItem = request_queue.get_nowait()
+        if not item.future.done():
+            item.future.cancel()
 
 
 app = fastapi.FastAPI(title="Gemma JAX Inference Service", lifespan=lifespan)
